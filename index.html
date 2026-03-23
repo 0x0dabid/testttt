@@ -299,294 +299,14 @@
 </div>
 
 <!-- Notification -->
-<div id="notification" id="notification"></div>
+<div id="notification"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
 <script>
 // ============================================================
 // CHRONICLES OF THE WANDERER — Open World 3D RPG
 // ============================================================
-
-// GLTFLoader inline (r128 compatible)
-(function(){
-  const BINARY_EXT_HEADER_MAGIC = 'glTF';
-  const EXTENSIONS = { KHR_BINARY_GLTF: 'KHR_binary_glTF', KHR_MATERIALS_UNLIT: 'KHR_materials_unlit' };
-  const WEBGL_CONSTANTS = { FLOAT:5126, FLOAT_VEC2:35664, FLOAT_VEC3:35665, FLOAT_VEC4:35666, LINEAR:9729, REPEAT:10497, SAMPLER_2D:35678, UNSIGNED_BYTE:5121, UNSIGNED_SHORT:5123, TRIANGLES:4, LINES:1, UNSIGNED_INT:5125 };
-  const WEBGL_TYPE_SIZES = { SCALAR:1, VEC2:2, VEC3:3, VEC4:4, MAT2:4, MAT3:9, MAT4:16 };
-  const WEBGL_COMPONENT_TYPES = { 5120:Int8Array, 5121:Uint8Array, 5122:Int16Array, 5123:Uint16Array, 5125:Uint32Array, 5126:Float32Array };
-
-  class GLTFLoader {
-    constructor(manager) { this.manager = manager || THREE.DefaultLoadingManager; }
-    load(url, onLoad, onProgress, onError) {
-      const loader = new THREE.FileLoader(this.manager);
-      loader.setResponseType('arraybuffer');
-      loader.load(url, (data) => {
-        try { this.parse(data, '', (gltf) => onLoad(gltf), onError); }
-        catch(e) { if(onError) onError(e); else console.error(e); }
-      }, onProgress, onError);
-    }
-    parse(data, path, onLoad, onError) {
-      let content, body;
-      const magic = new TextDecoder().decode(new Uint8Array(data, 0, 4));
-      if (magic === BINARY_EXT_HEADER_MAGIC) {
-        const view = new DataView(data);
-        const version = view.getUint32(4, true);
-        const jsonLen = view.getUint32(12, true);
-        content = JSON.parse(new TextDecoder().decode(new Uint8Array(data, 20, jsonLen)));
-        body = data.slice(20 + jsonLen + 8);
-      } else {
-        content = JSON.parse(new TextDecoder().decode(new Uint8Array(data)));
-      }
-      const parser = new GLTFParser(content, body, path);
-      parser.parse(onLoad, onError);
-    }
-  }
-
-  class GLTFParser {
-    constructor(json, body, path) { this.json = json; this.body = body; this.path = path; }
-
-    parse(onLoad, onError) {
-      try {
-        const result = { scene: new THREE.Group(), scenes: [], animations: [], cameras: [], asset: this.json.asset || {} };
-        this.buildMaterials();
-        const nodes = this.buildNodes();
-        const skins = this.json.skins || [];
-
-        // Build skeleton data
-        const skeletons = [];
-        for (const skin of skins) {
-          const bones = skin.joints.map(j => nodes[j]);
-          const boneInverses = [];
-          if (skin.inverseBindMatrices !== undefined) {
-            const acc = this.getAccessorData(skin.inverseBindMatrices);
-            for (let i = 0; i < bones.length; i++) {
-              const m = new THREE.Matrix4();
-              m.fromArray(acc, i * 16);
-              boneInverses.push(m);
-            }
-          }
-          skeletons.push(new THREE.Skeleton(bones, boneInverses));
-        }
-
-        // Setup scenes
-        const scenes = this.json.scenes || [{ nodes: Object.keys(nodes).map(Number) }];
-        for (const sceneDef of scenes) {
-          const group = new THREE.Group();
-          for (const ni of (sceneDef.nodes || [])) {
-            group.add(nodes[ni]);
-          }
-          result.scenes.push(group);
-        }
-        result.scene = result.scenes[this.json.scene || 0] || result.scenes[0] || new THREE.Group();
-
-        // Bind skins
-        result.scene.traverse(node => {
-          if (node.isSkinnedMesh && node.userData._skinIndex !== undefined) {
-            const skeleton = skeletons[node.userData._skinIndex];
-            if (skeleton) node.bind(skeleton);
-          }
-        });
-
-        // Animations
-        result.animations = this.buildAnimations(nodes);
-
-        onLoad(result);
-      } catch(e) {
-        if (onError) onError(e); else console.error(e);
-      }
-    }
-
-    getBuffer(index) {
-      const bufferDef = this.json.buffers[index];
-      if (bufferDef.uri) return null;
-      return this.body;
-    }
-
-    getAccessorData(index) {
-      const acc = this.json.accessors[index];
-      const bv = this.json.bufferViews[acc.bufferView];
-      const buffer = this.getBuffer(bv.buffer);
-      const TypedArray = WEBGL_COMPONENT_TYPES[acc.componentType];
-      const itemSize = WEBGL_TYPE_SIZES[acc.type];
-      const byteOffset = (bv.byteOffset || 0) + (acc.byteOffset || 0);
-      const byteStride = bv.byteStride;
-      if (byteStride && byteStride !== itemSize * TypedArray.BYTES_PER_ELEMENT) {
-        const result = new TypedArray(acc.count * itemSize);
-        const srcView = new DataView(buffer, byteOffset);
-        for (let i = 0; i < acc.count; i++) {
-          for (let j = 0; j < itemSize; j++) {
-            const byteIdx = i * byteStride + j * TypedArray.BYTES_PER_ELEMENT;
-            if (TypedArray === Float32Array) result[i * itemSize + j] = srcView.getFloat32(byteIdx, true);
-            else if (TypedArray === Uint16Array) result[i * itemSize + j] = srcView.getUint16(byteIdx, true);
-            else if (TypedArray === Uint32Array) result[i * itemSize + j] = srcView.getUint32(byteIdx, true);
-            else result[i * itemSize + j] = srcView.getUint8(byteIdx);
-          }
-        }
-        return result;
-      }
-      return new TypedArray(buffer, byteOffset, acc.count * itemSize);
-    }
-
-    buildMaterials() {
-      this.materials = [];
-      for (const matDef of (this.json.materials || [])) {
-        const params = { side: THREE.DoubleSide };
-        const pbr = matDef.pbrMetallicRoughness;
-        if (pbr) {
-          if (pbr.baseColorFactor) params.color = new THREE.Color().fromArray(pbr.baseColorFactor);
-          params.metalness = pbr.metallicFactor !== undefined ? pbr.metallicFactor : 0.5;
-          params.roughness = pbr.roughnessFactor !== undefined ? pbr.roughnessFactor : 0.5;
-          if (pbr.baseColorTexture) {
-            const tex = this.buildTexture(pbr.baseColorTexture.index);
-            if (tex) params.map = tex;
-          }
-        }
-        if (matDef.emissiveFactor) {
-          params.emissive = new THREE.Color().fromArray(matDef.emissiveFactor);
-        }
-        if (matDef.alphaMode === 'BLEND') { params.transparent = true; params.opacity = 0.9; }
-        this.materials.push(new THREE.MeshStandardMaterial(params));
-      }
-    }
-
-    buildTexture(texIndex) {
-      const texDef = this.json.textures[texIndex];
-      if (!texDef) return null;
-      const imgDef = this.json.images[texDef.source];
-      if (!imgDef) return null;
-      if (imgDef.bufferView !== undefined) {
-        const bv = this.json.bufferViews[imgDef.bufferView];
-        const buffer = this.getBuffer(bv.buffer);
-        const data = new Uint8Array(buffer, bv.byteOffset || 0, bv.byteLength);
-        const blob = new Blob([data], { type: imgDef.mimeType || 'image/png' });
-        const url = URL.createObjectURL(blob);
-        const tex = new THREE.TextureLoader().load(url);
-        tex.flipY = false;
-        tex.encoding = THREE.sRGBEncoding;
-        return tex;
-      }
-      return null;
-    }
-
-    buildNodes() {
-      const nodes = {};
-      const defs = this.json.nodes || [];
-
-      // First pass: create nodes
-      for (let i = 0; i < defs.length; i++) {
-        const def = defs[i];
-        let node;
-        if (def.mesh !== undefined) {
-          node = this.buildMesh(def.mesh, def.skin);
-          // If buildMesh returns a group, that's fine
-        } else {
-          node = new THREE.Bone();
-        }
-        if (def.name) node.name = def.name;
-        if (def.translation) node.position.fromArray(def.translation);
-        if (def.rotation) node.quaternion.fromArray(def.rotation);
-        if (def.scale) node.scale.fromArray(def.scale);
-        if (def.matrix) {
-          const m = new THREE.Matrix4();
-          m.fromArray(def.matrix);
-          m.decompose(node.position, node.quaternion, node.scale);
-        }
-        nodes[i] = node;
-      }
-
-      // Second pass: parent
-      for (let i = 0; i < defs.length; i++) {
-        const def = defs[i];
-        if (def.children) {
-          for (const ci of def.children) {
-            if (nodes[ci]) nodes[i].add(nodes[ci]);
-          }
-        }
-      }
-      return nodes;
-    }
-
-    buildMesh(meshIndex, skinIndex) {
-      const meshDef = this.json.meshes[meshIndex];
-      const group = new THREE.Group();
-      for (const prim of meshDef.primitives) {
-        const geom = new THREE.BufferGeometry();
-        const attrs = prim.attributes;
-        if (attrs.POSITION !== undefined) {
-          const d = this.getAccessorData(attrs.POSITION);
-          geom.setAttribute('position', new THREE.Float32BufferAttribute(d, 3));
-        }
-        if (attrs.NORMAL !== undefined) {
-          const d = this.getAccessorData(attrs.NORMAL);
-          geom.setAttribute('normal', new THREE.Float32BufferAttribute(d, 3));
-        }
-        if (attrs.TEXCOORD_0 !== undefined) {
-          const d = this.getAccessorData(attrs.TEXCOORD_0);
-          geom.setAttribute('uv', new THREE.Float32BufferAttribute(d, 2));
-        }
-        if (attrs.JOINTS_0 !== undefined) {
-          const d = this.getAccessorData(attrs.JOINTS_0);
-          geom.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(d, 4));
-        }
-        if (attrs.WEIGHTS_0 !== undefined) {
-          const d = this.getAccessorData(attrs.WEIGHTS_0);
-          geom.setAttribute('skinWeight', new THREE.Float32BufferAttribute(d, 4));
-        }
-        if (prim.indices !== undefined) {
-          const d = this.getAccessorData(prim.indices);
-          geom.setIndex(new THREE.BufferAttribute(d, 1));
-        }
-        geom.computeBoundingSphere();
-        const mat = prim.material !== undefined ? this.materials[prim.material] : new THREE.MeshStandardMaterial({ color: 0x888888, side: THREE.DoubleSide });
-
-        let mesh;
-        if (skinIndex !== undefined && geom.attributes.skinIndex && geom.attributes.skinWeight) {
-          mesh = new THREE.SkinnedMesh(geom, mat);
-          mesh.userData._skinIndex = skinIndex;
-        } else {
-          mesh = new THREE.Mesh(geom, mat);
-        }
-        mesh.castShadow = true;
-        mesh.receiveShadow = true;
-        group.add(mesh);
-      }
-      return group.children.length === 1 ? group.children[0] : group;
-    }
-
-    buildAnimations(nodes) {
-      const animations = [];
-      for (const animDef of (this.json.animations || [])) {
-        const tracks = [];
-        for (const channel of animDef.channels) {
-          const sampler = animDef.samplers[channel.sampler];
-          const target = channel.target;
-          const node = nodes[target.node];
-          if (!node) continue;
-          const input = this.getAccessorData(sampler.input);
-          const output = this.getAccessorData(sampler.output);
-          const times = Array.from(input);
-          const values = Array.from(output);
-          const name = node.name || `node_${target.node}`;
-          let trackType, propName;
-          switch (target.path) {
-            case 'translation': trackType = THREE.VectorKeyframeTrack; propName = '.position'; break;
-            case 'rotation': trackType = THREE.QuaternionKeyframeTrack; propName = '.quaternion'; break;
-            case 'scale': trackType = THREE.VectorKeyframeTrack; propName = '.scale'; break;
-            default: continue;
-          }
-          tracks.push(new trackType(name + propName, times, values));
-        }
-        if (tracks.length) {
-          const clip = new THREE.AnimationClip(animDef.name || `animation_${animations.length}`, undefined, tracks);
-          animations.push(clip);
-        }
-      }
-      return animations;
-    }
-  }
-
-  THREE.GLTFLoader = GLTFLoader;
-})();
 
 
 // ============================================================
@@ -1147,43 +867,21 @@ function updateLoadBar(pct, text) {
 
 updateLoadBar(10, 'Loading world geometry...');
 
-function parseGLB(data) {
+function loadGLB(url) {
   return new Promise((resolve, reject) => {
-    loader.parse(data, '', resolve, reject);
-  });
-}
-
-function loadArrayBuffer(url) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open('GET', url, true);
-    xhr.responseType = 'arraybuffer';
-    xhr.onprogress = (e) => {
-      if (e.lengthComputable) {
-        const pct = Math.round((e.loaded / e.total) * 30);
-        updateLoadBar(20 + pct, 'Downloading character...');
-      }
-    };
-    xhr.onload = () => {
-      if (xhr.status === 200 || xhr.status === 0) resolve(xhr.response);
-      else reject(new Error('HTTP ' + xhr.status));
-    };
-    xhr.onerror = () => reject(new Error('Network error'));
-    xhr.send();
+    loader.load(url, resolve, undefined, reject);
   });
 }
 
 (async function initModels() {
   try {
     updateLoadBar(15, 'Loading walking animation...');
-    const walkData = await loadArrayBuffer('walking.glb');
-    updateLoadBar(50, 'Parsing walk cycle...');
-    const walkGltf = await parseGLB(walkData);
+    const walkGltf = await loadGLB('walking.glb');
+    updateLoadBar(50, 'Walk cycle loaded...');
 
     updateLoadBar(60, 'Loading character model...');
-    const idleData = await loadArrayBuffer('idle.glb');
-    updateLoadBar(80, 'Parsing character mesh...');
-    const idleGltf = await parseGLB(idleData);
+    const idleGltf = await loadGLB('idle.glb');
+    updateLoadBar(80, 'Character mesh loaded...');
 
     // Use the walking model as primary (has animation baked in)
     playerModel = walkGltf.scene;
@@ -1215,28 +913,7 @@ function loadArrayBuffer(url) {
     }, 800);
   } catch(err) {
     console.warn('GLB load error:', err);
-    // Fallback: try loading from /mnt paths
-    try {
-      updateLoadBar(60, 'Trying alternate path...');
-      const walkData2 = await loadArrayBuffer('/mnt/user-data/uploads/Meshy_AI_Conan_Edogawa_Tiny_D_biped_Animation_Walking_withSkin.glb');
-      const walkGltf2 = await parseGLB(walkData2);
-      playerModel = walkGltf2.scene;
-      playerModel.scale.set(1.5, 1.5, 1.5);
-      playerModel.traverse(c => { if (c.isMesh) { c.castShadow = true; c.receiveShadow = true; } });
-      if (walkGltf2.animations && walkGltf2.animations.length > 0) {
-        playerMixer = new THREE.AnimationMixer(playerModel);
-        walkAction = playerMixer.clipAction(walkGltf2.animations[0]);
-        walkAction.play();
-        walkAction.paused = true;
-      }
-      playerGroup.remove(placeholderBody);
-      playerGroup.remove(placeholderHead);
-      playerGroup.add(playerModel);
-      updateLoadBar(100, 'World ready!');
-    } catch(err2) {
-      console.warn('Fallback also failed, using placeholder:', err2);
-      updateLoadBar(100, 'Using placeholder character — entering world...');
-    }
+    updateLoadBar(100, 'Using placeholder character — entering world...');
     setTimeout(() => {
       document.getElementById('loading-screen').classList.add('hidden');
       document.getElementById('hud').style.display = '';
